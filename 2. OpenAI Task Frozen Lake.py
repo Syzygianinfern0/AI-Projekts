@@ -45,4 +45,5 @@ for i in range(episodes):
     # Code will stop at d == True, and render one state before it
     rewards.append(rAll)
     env.render()
+env.close()
 print("Average Reward : ", sum(rewards) / episodes)
