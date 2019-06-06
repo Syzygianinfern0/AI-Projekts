@@ -12,19 +12,20 @@ import time
 env = gym.make('MountainCar-v0')
 
 # Constants
-TRAIN_EPIS = 250
-REPLAY_SIZE = 1_00_000
-EPSILON = 1
-EPSILON_DECAY = 0.997
-EPSILON_MIN = 0.01
-LEARNING_RATE = 0.005
-GAMMA = 0.96
-BATCH_SIZE = 64
-PLOT_FREQ = 5
-TAU = 0.01
-ALPHA = 0.65
-OFFSET = 0.1
+TRAIN_EPIS = 250			# Number of episodes to train on
+REPLAY_SIZE = 1_00_000		# Experience memory size
+EPSILON = 1					# Initial value
+EPSILON_DECAY = 0.997		# Decay rate
+EPSILON_MIN = 0.01			# Lowest Value
+LEARNING_RATE = 0.005		# LR for Adam 
+GAMMA = 0.96				# Discounter
+BATCH_SIZE = 64				# Size of training Batch
+PLOT_FREQ = 5				# Log frequency
+TAU = 0.01					# Target network copy bias
+ALPHA = 0.65				# Damper for probabilities
+OFFSET = 0.1				# For calculating the new priority
 
+# Path to save weights
 PATH = f'results/weights/Double DQN + PER Mountain Cart Retry/lr-{LEARNING_RATE}_gma-{GAMMA}_epsdk-{EPSILON_DECAY}-' \
     f'{int(time.time())}'
 os.makedirs(PATH, exist_ok=True)
@@ -35,6 +36,10 @@ class Network:
     """Handles the brain"""
 
     def __init__(self, env):
+    	"""
+    	Init all class variables
+    	:param env: Environment to work on
+    	"""
         self.inputs = env.observation_space.shape[0]
         self.outputs = env.action_space.n
         self.eps = EPSILON
@@ -48,10 +53,10 @@ class Network:
         self.priorities = deque(maxlen=self.size)
         self.batch_size = BATCH_SIZE
         self.gamma = GAMMA
-        self.goal_pts = np.arange(start=-0.4,
-                                  stop=0.625,
-                                  step=0.025)
-        self.i = 0
+        self.goal_pts = np.arange(start=-0.4,	# Custom reward checkpoints to encourage
+                                  stop=0.625,	# exploration and therefore attain the 
+                                  step=0.025)	# target point
+        self.i = 0								# Checkpoints reached
         self.alpha = ALPHA
         self.offset = OFFSET
 
@@ -117,22 +122,11 @@ class Network:
         reward = 0
         while self.goal_pts[self.i] < state[0]:
             self.i += 1
-            reward += 10
+            reward += 10		# For every checkpoint reached award 10
         if state[0] >= 0.5:
             print("REACHED GOAL!!!")
-            reward += 30
+            reward += 30		# For level completion
             plt.scatter(epi, epi_reward + 30)
-
-        ###########
-        # if state[0] == best_ht:
-        #     reward = 10
-        # if state[0] >= 0.5:
-        #     print("REACHED GOAL!!!")
-        #     reward += 30
-        ###########
-        #     reward = 100
-        # if state[0] > -0.4:
-        #     reward = (1 + state[0]) ** 2
         return reward
 
     def make_model(self):
@@ -142,7 +136,6 @@ class Network:
         """
         model = tf.keras.models.Sequential([
             tf.keras.layers.Dense(100, 'relu', input_dim=self.inputs),
-            # tf.keras.layers.Dense(16, 'relu'),
             tf.keras.layers.Dense(self.outputs, 'linear')
         ])
         model.compile(
@@ -162,29 +155,27 @@ class Network:
             indices = np.random.choice(
                 a=range(len(self.exp_memory)),
                 size=self.batch_size,
-                p=probabilities,
+                p=probabilities,			# Samples based on propabilitiies
             )
             imp_samp_weights = 1 / (len(self.exp_memory) * probabilities[indices])
             imp_samp_weights = imp_samp_weights / max(imp_samp_weights)
-            imp_samp_weights = imp_samp_weights ** (1-self.eps)
-            batch = np.array(self.exp_memory)[indices]
-            states = np.array([exp[0] for exp in batch])
+            imp_samp_weights = imp_samp_weights ** (1-self.eps)		# ISW for the loss function
+            batch = np.array(self.exp_memory)[indices]		
+            states = np.array([exp[0] for exp in batch])			# Unpack experiences
             actions = np.array([exp[1] for exp in batch])
             rewards = np.array([exp[2] for exp in batch])
             next_states = np.array([exp[3] for exp in batch])
             dones = np.array([exp[4] for exp in batch])
-            states = np.squeeze(states)
+            states = np.squeeze(states)								# Preprocessing
             next_states = np.squeeze(next_states)
             q_values_target = rewards + (1 - dones) * self.gamma * self.target_model.predict_on_batch(next_states)[0][
-                np.argmax(self.local_model.predict_on_batch(next_states), axis=1)]
+                np.argmax(self.local_model.predict_on_batch(next_states), axis=1)]		# Bellman Equation
             q_values_current = self.local_model.predict_on_batch(states)[[np.arange(self.batch_size)], [actions]]
-            # [self.priorities[i] = p for i, p in zip(indices, np.squeeze(abs(q_values_target - q_values_current) +
-            # self.offset))]
             for i, p in zip(indices, np.squeeze(abs(q_values_target - q_values_current) + self.offset)):
-                self.priorities[i] = p
+                self.priorities[i] = p 		# Set new priorities
             q_tuples_current = self.local_model.predict_on_batch(states)
             q_tuples_target = q_tuples_current
-            q_tuples_target[[np.arange(self.batch_size)], [actions]] = q_values_target
+            q_tuples_target[[np.arange(self.batch_size)], [actions]] = q_values_target	# Update favoured values to train upon
 
             self.local_model.fit(states, q_tuples_target, verbose=0, sample_weight=imp_samp_weights)
         else:
@@ -205,7 +196,6 @@ def evaluate_agent(agent):
         action = agent.get_action(state, evaluate=True)
         next_state, reward, done, info = env.step(action)
         env.render()
-        # reward = agent.custom_reward(next_state)
         next_state = np.array([next_state])
         epi_reward += reward
         agent.append_experience(state, action, reward, next_state, done)
@@ -216,23 +206,23 @@ def evaluate_agent(agent):
 if __name__ == '__main__':
     agent = Network(env)
     rewards = []
-    agg_ep_rewards = {'ep': [], 'avg': [], 'max': [], 'min': []}
+    agg_ep_rewards = {'ep': [], 'avg': [], 'max': [], 'min': []}	# To store progress
     timesteps = 0
     for epi in range(TRAIN_EPIS):
-        agent.i = 0
+        agent.i = 0			# Checkpoint Index
         done = False
         state = env.reset()
-        best_ht = state[0]
+        best_ht = state[0]	# To know progress
         state = np.array([state])
         epi_reward = 0
         while not done:
             timesteps += 1
-            action = agent.get_action(state)
+            action = agent.get_action(state)	# Based on Epsilon greedy
             next_state, reward, done, info = env.step(action)
-            if best_ht < next_state[0]:
+            if best_ht < next_state[0]:			# To track progress
                 best_ht = next_state[0]
             env.render()
-            reward = agent.custom_reward(next_state)
+            reward = agent.custom_reward(next_state)	# Compute custom reward function encouraging exploration
             next_state = np.array([next_state])
             epi_reward += reward
             agent.append_experience(state, action, reward, next_state, done)
@@ -240,7 +230,7 @@ if __name__ == '__main__':
             agent.update_target_network()
             state = next_state
             if timesteps % 20 == 0:
-                agent.anneal_hps()
+                agent.anneal_hps()		# Update hyper params
         rewards.append(epi_reward)
         print(f"Episode : {epi + 1}    Reward : {epi_reward}    Epsilon : {agent.eps}    Best Ht : {best_ht}")
         if not epi % PLOT_FREQ:
